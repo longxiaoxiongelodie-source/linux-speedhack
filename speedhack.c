@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/prctl.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -45,6 +46,40 @@ static int (*real_clock_gettime)(clockid_t, struct timespec *);
 static int (*real_gettimeofday)(struct timeval *, void *);
 static int (*real_nanosleep)(const struct timespec *, struct timespec *);
 static int (*real_usleep)(useconds_t);
+
+/* ------------------------------------------------------------------ */
+/*  音频线程检测（TLS 缓存，每线程只做一次 prctl 系统调用）              */
+/* ------------------------------------------------------------------ */
+
+/* -1=未检测  0=普通线程  1=音频线程 */
+static __thread int tls_is_audio = -1;
+
+static int is_audio_thread(void)
+{
+    if (tls_is_audio >= 0)
+        return tls_is_audio;
+
+    char name[16] = {0};
+    prctl(PR_GET_NAME, name, 0, 0, 0);
+
+    /* Wine/Proton 音频线程名关键字（winealsa / winepulse / pipewire / WASAPI…） */
+    static const char * const AUDIO_KEYS[] = {
+        "audio", "Audio", "sound", "Sound",
+        "wasapi", "WASAPI", "mmdevapi",
+        "winealsa", "winepulse", "wineoss",
+        "pulse", "pipewire", "alsa",
+        "mmix", "period",           /* alsa period 线程 */
+        NULL
+    };
+    tls_is_audio = 0;
+    for (int i = 0; AUDIO_KEYS[i]; i++) {
+        if (strstr(name, AUDIO_KEYS[i])) {
+            tls_is_audio = 1;
+            break;
+        }
+    }
+    return tls_is_audio;
+}
 
 /* ------------------------------------------------------------------ */
 /*  内部辅助                                                             */
@@ -210,6 +245,10 @@ static void speedhack_fini(void)
 
 int clock_gettime(clockid_t clk, struct timespec *ts)
 {
+    /* 音频线程始终返回真实时钟，避免 PipeWire/ALSA 缓冲区溢出 */
+    if (is_audio_thread())
+        return real_clock_gettime(clk, ts);
+
     /* 单调时钟族 */
     if (clk == CLOCK_MONOTONIC     ||
         clk == CLOCK_MONOTONIC_COARSE ||
@@ -248,6 +287,8 @@ int clock_gettime(clockid_t clk, struct timespec *ts)
 
 int gettimeofday(struct timeval *tv, void *tz)
 {
+    if (is_audio_thread())
+        return real_gettimeofday(tv, tz);
     {
         int64_t rw = read_real_wall_us();
         pthread_rwlock_rdlock(&g_lock);
@@ -273,7 +314,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
     int    sleep_hack = g_sleep_hack;
     pthread_rwlock_unlock(&g_lock);
 
-    if (!sleep_hack || speed < 1.0 + 1e-9)
+    if (!sleep_hack || speed < 1.0 + 1e-9 || is_audio_thread())
         return real_nanosleep(req, rem);
 
     int64_t ns     = (int64_t)req->tv_sec * 1000000000LL + req->tv_nsec;
@@ -306,7 +347,7 @@ int usleep(useconds_t usec)
     int    sleep_hack = g_sleep_hack;
     pthread_rwlock_unlock(&g_lock);
 
-    if (!sleep_hack || speed < 1.0 + 1e-9)
+    if (!sleep_hack || speed < 1.0 + 1e-9 || is_audio_thread())
         return real_usleep(usec);
 
     useconds_t scaled = (useconds_t)(usec / speed);
