@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=SpeedHack
+Comment=Linux 游戏变速器
+Exec=/usr/bin/python3 /home/fluorene/speedhack/speedhack_gui.py
+Icon=/home/fluorene/speedhack/speedhack.png
+Terminal=false
+StartupNotify=true
+Categories=Game;

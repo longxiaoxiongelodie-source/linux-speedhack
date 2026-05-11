@@ -1,0 +1,5 @@
+*.so
+speedctl
+speedhack.png
+__pycache__/
+*.pyc
