@@ -197,6 +197,17 @@ class App(tk.Tk):
                                    font=FONT_SPEED, bg=C["bg"], fg=C["green"])
         self._speed_lbl.pack(pady=(4, 2))
 
+        # 睡眠缩短开关
+        frm_opt = tk.Frame(self, bg=C["bg"])
+        frm_opt.pack(pady=(0, 2))
+        self._sleep_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(frm_opt, text="缩短 sleep（旧游戏/固定帧率游戏需要，现代游戏开了会卡）",
+                       variable=self._sleep_var, command=self._on_sleep_toggle,
+                       bg=C["bg"], fg=C["subtext"], selectcolor=C["surface"],
+                       activebackground=C["bg"], activeforeground=C["text"],
+                       font=FONT_STATUS, cursor="hand2",
+                       relief="flat", bd=0).pack()
+
         frm_sl = tk.Frame(self, bg=C["bg"])
         frm_sl.pack(fill="x", padx=16, pady=(0, 8))
         tk.Label(frm_sl, text="0.1×", bg=C["bg"],
@@ -312,11 +323,14 @@ class App(tk.Tk):
         self._btn_stop.config(state="normal")
         self._update_dot(True)
         reply = self._send("?")
-        if reply and reply.startswith("speed="):
-            try:
-                self._set_speed_display(float(reply.split("=")[1]))
-            except Exception:
-                pass
+        if reply:
+            # 格式: "speed=X.XXX sleep=N"
+            for part in reply.split():
+                if part.startswith("speed="):
+                    try: self._set_speed_display(float(part[6:]))
+                    except Exception: pass
+                elif part.startswith("sleep="):
+                    self._sleep_var.set(part[6:] == "1")
         self._status(f"已连接  PID={pid}", "ok")
 
     # ── 启动 / 停止 ───────────────────────────────────────────────
@@ -374,6 +388,15 @@ class App(tk.Tk):
     def _set_speed(self, speed: float):
         self._set_speed_display(speed)
         self._apply_speed(speed)
+
+    def _on_sleep_toggle(self):
+        val = 1 if self._sleep_var.get() else 0
+        reply = self._send(f"sleep={val}")
+        if reply and "OK" in reply:
+            state = "已启用（旧游戏模式）" if val else "已关闭（默认）"
+            self._status(f"缩短 sleep {state}", "ok")
+        elif not self._sock_ready:
+            pass  # 未连接时静默，连接后状态会同步
 
     def _on_slider_move(self, val):
         if not self._slider_busy:

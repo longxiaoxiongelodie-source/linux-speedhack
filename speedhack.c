@@ -32,6 +32,7 @@
 /* ------------------------------------------------------------------ */
 
 static double           g_speed          = 1.0;
+static int              g_sleep_hack     = 0;   /* 默认关：不缩短 sleep，避免 vsync 卡顿 */
 static int64_t          g_real_mono_base = 0;   /* 上次调速时的真实单调时钟 (ns) */
 static int64_t          g_fake_mono_base = 0;   /* 对应的虚假单调时钟 (ns)      */
 static int64_t          g_real_wall_base = 0;   /* 上次调速时的真实墙钟 (us)    */
@@ -113,10 +114,16 @@ static void *ctrl_thread(void *arg)
             if (nl) *nl = '\0';
 
             if (buf[0] == '?' || buf[0] == '\0') {
-                /* 查询当前速度 */
                 pthread_rwlock_rdlock(&g_lock);
-                dprintf(cl, "speed=%.3f\n", g_speed);
+                dprintf(cl, "speed=%.3f sleep=%d\n", g_speed, g_sleep_hack);
                 pthread_rwlock_unlock(&g_lock);
+            } else if (strncmp(buf, "sleep=", 6) == 0) {
+                int v = atoi(buf + 6);
+                pthread_rwlock_wrlock(&g_lock);
+                g_sleep_hack = v ? 1 : 0;
+                pthread_rwlock_unlock(&g_lock);
+                dprintf(cl, "OK sleep=%d\n", g_sleep_hack);
+                fprintf(stderr, "[speedhack] sleep_hack -> %d\n", g_sleep_hack);
             } else {
                 double s = atof(buf);
                 if (s >= 0.01 && s <= 100.0) {
@@ -159,6 +166,11 @@ static void speedhack_init(void)
             g_speed = s;
             fprintf(stderr, "[speedhack] 初始速度 %.3fx\n", g_speed);
         }
+    }
+    const char *env_sleep = getenv("SPEEDHACK_SLEEP");
+    if (env_sleep && env_sleep[0] == '1') {
+        g_sleep_hack = 1;
+        fprintf(stderr, "[speedhack] sleep_hack 已启用\n");
     }
 
     /*
@@ -257,11 +269,11 @@ int gettimeofday(struct timeval *tv, void *tz)
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
     pthread_rwlock_rdlock(&g_lock);
-    double speed = g_speed;
+    double speed      = g_speed;
+    int    sleep_hack = g_sleep_hack;
     pthread_rwlock_unlock(&g_lock);
 
-    /* 速度 <= 1 时不缩短睡眠，避免游戏变慢反而卡帧 */
-    if (speed < 1.0 + 1e-9)
+    if (!sleep_hack || speed < 1.0 + 1e-9)
         return real_nanosleep(req, rem);
 
     int64_t ns     = (int64_t)req->tv_sec * 1000000000LL + req->tv_nsec;
@@ -290,10 +302,11 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
 int usleep(useconds_t usec)
 {
     pthread_rwlock_rdlock(&g_lock);
-    double speed = g_speed;
+    double speed      = g_speed;
+    int    sleep_hack = g_sleep_hack;
     pthread_rwlock_unlock(&g_lock);
 
-    if (speed < 1.0 + 1e-9)
+    if (!sleep_hack || speed < 1.0 + 1e-9)
         return real_usleep(usec);
 
     useconds_t scaled = (useconds_t)(usec / speed);
