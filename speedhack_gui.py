@@ -197,16 +197,25 @@ class App(tk.Tk):
                                    font=FONT_SPEED, bg=C["bg"], fg=C["green"])
         self._speed_lbl.pack(pady=(4, 2))
 
-        # 睡眠缩短开关
+        # 选项行
         frm_opt = tk.Frame(self, bg=C["bg"])
         frm_opt.pack(pady=(0, 2))
         self._sleep_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(frm_opt, text="缩短 sleep（旧游戏/固定帧率游戏需要，现代游戏开了会卡）",
+        tk.Checkbutton(frm_opt,
+                       text="缩短 sleep（旧式固定帧率游戏用，现代游戏会卡）",
                        variable=self._sleep_var, command=self._on_sleep_toggle,
                        bg=C["bg"], fg=C["subtext"], selectcolor=C["surface"],
                        activebackground=C["bg"], activeforeground=C["text"],
                        font=FONT_STATUS, cursor="hand2",
-                       relief="flat", bd=0).pack()
+                       relief="flat", bd=0).pack(side="left", padx=(0, 16))
+        self._mute_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(frm_opt,
+                       text="加速时自动静音（避免音画错位）",
+                       variable=self._mute_var, command=self._on_mute_toggle,
+                       bg=C["bg"], fg=C["subtext"], selectcolor=C["surface"],
+                       activebackground=C["bg"], activeforeground=C["text"],
+                       font=FONT_STATUS, cursor="hand2",
+                       relief="flat", bd=0).pack(side="left")
 
         frm_sl = tk.Frame(self, bg=C["bg"])
         frm_sl.pack(fill="x", padx=16, pady=(0, 8))
@@ -389,6 +398,35 @@ class App(tk.Tk):
         self._set_speed_display(speed)
         self._apply_speed(speed)
 
+    def _set_game_mute(self, mute: bool):
+        """用 pactl 按进程 PID 静音/取消静音游戏。"""
+        if not self._pid:
+            return
+        state = "1" if mute else "0"
+        try:
+            # LC_ALL=C 强制英文输出，避免中文 locale 改变标签名
+            env = {**os.environ, "LC_ALL": "C"}
+            out = subprocess.check_output(
+                ["pactl", "list", "sink-inputs"],
+                text=True, stderr=subprocess.DEVNULL, env=env)
+            idx = None
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Sink Input #"):
+                    idx = line.split("#")[1].strip()
+                elif f"application.process.id = \"{self._pid}\"" in line and idx:
+                    subprocess.run(["pactl", "set-sink-input-mute", idx, state],
+                                   stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def _on_mute_toggle(self):
+        # 复选框切换时按当前速度决定是否立刻静音
+        if self._mute_var.get() and self._cur_speed > 1.01:
+            self._set_game_mute(True)
+        else:
+            self._set_game_mute(False)
+
     def _on_sleep_toggle(self):
         val = 1 if self._sleep_var.get() else 0
         reply = self._send(f"sleep={val}")
@@ -414,6 +452,9 @@ class App(tk.Tk):
         reply = self._send(f"{speed:.3f}")
         if reply and "OK" in reply:
             self._status(f"速度  {speed:.2f}×   PID={self._pid}", "ok")
+            # 自动静音：加速时静音，恢复 1× 时取消
+            if self._mute_var.get():
+                self._set_game_mute(speed > 1.01)
         elif reply:
             self._status(reply, "warn")
         else:

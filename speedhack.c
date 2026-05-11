@@ -64,11 +64,13 @@ static int is_audio_thread(void)
 
     /* Wine/Proton 音频线程名关键字（winealsa / winepulse / pipewire / WASAPI…） */
     static const char * const AUDIO_KEYS[] = {
-        "audio", "Audio", "sound", "Sound",
+        "audio", "Audio", "FAudio",
+        "sound", "Sound",
         "wasapi", "WASAPI", "mmdevapi",
         "winealsa", "winepulse", "wineoss",
         "pulse", "pipewire", "alsa",
         "mmix", "period",           /* alsa period 线程 */
+        "BankManager",              /* Wwise AK::BankManager */
         NULL
     };
     tls_is_audio = 0;
